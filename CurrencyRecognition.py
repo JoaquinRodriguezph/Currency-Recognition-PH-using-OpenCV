@@ -55,8 +55,7 @@ sift = cv2.SIFT_create()
 # Load template images and compute descriptors
 print("Opening template images...")
 template_files = {
-    "1000 Peso Frontv1": "Templates/front/1000PesoFrontv1.png",
-    "1000 Peso Frontv2": "Templates/front/1000PesoFrontv2.jpg",
+    "1000 Peso Front": "Templates/front/1000PesoFrontv2.jpg",
     "500 Peso Front": "Templates/front/500PesoFront.jpg",
     "200 Peso Front": "Templates/front/200PesoFront.png",
     "100 Peso Front": "Templates/front/100PesoFront.jpg",
@@ -80,7 +79,7 @@ for name, path in template_files.items():
     templates[name] = (template_image, template_kp, template_desc)
 
 # Load the input image
-input_image_path = "Examples/20pesos.jpg"
+input_image_path = "Examples/50peso.jpg"
 input_image = cv2.imread(input_image_path)
 gray_input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
 
