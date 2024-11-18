@@ -20,8 +20,8 @@ def recognize_bill_with_homography(template_kp, template_desc, input_kp, input_d
             good_matches.append(m)
 
     # Require a minimum number of matches to proceed
-    MIN_MATCH_COUNT = 35
-    if len(good_matches) > MIN_MATCH_COUNT:
+    MIN_MATCH_COUNT = 30
+    if len(good_matches) >= MIN_MATCH_COUNT:
         # Extract the matched keypoints
         src_pts = np.float32([template_kp[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
         dst_pts = np.float32([input_kp[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
@@ -55,10 +55,19 @@ sift = cv2.SIFT_create()
 # Load template images and compute descriptors
 print("Opening template images...")
 template_files = {
-    "1000 Peso Front": "Templates/front/1000PesoFront.png",
+    "1000 Peso Frontv1": "Templates/front/1000PesoFrontv1.png",
+    "1000 Peso Frontv2": "Templates/front/1000PesoFrontv2.jpg",
     "500 Peso Front": "Templates/front/500PesoFront.jpg",
-    "1000 Peso Back": "Templates/back/1000PesoBack.png",
-    "500 Peso Back": "Templates/back/500PesoBack.jpg"
+    "200 Peso Front": "Templates/front/200PesoFront.png",
+    "100 Peso Front": "Templates/front/100PesoFront.jpg",
+    "50 Peso Front": "Templates/front/50PesoFront.jpg",
+    "20 Peso Front": "Templates/front/20PesoFront.jpg",
+    "1000 Peso Back": "Templates/back/1000PesoBack.jpg",
+    "500 Peso Back": "Templates/back/500PesoBack.jpg",
+    "200 Peso Back": "Templates/back/200PesoBack.jpg",
+    "100 Peso Back": "Templates/back/100PesoBack.jpg",
+    "50 Peso Back": "Templates/back/50PesoBack.jpg",
+    "20 Peso Back": "Templates/back/20PesoBack.jpg"
 }
 
 templates = {}
@@ -71,7 +80,7 @@ for name, path in template_files.items():
     templates[name] = (template_image, template_kp, template_desc)
 
 # Load the input image
-input_image_path = "example500pesoback.jpg"
+input_image_path = "Examples/20pesos.jpg"
 input_image = cv2.imread(input_image_path)
 gray_input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
 
