@@ -72,6 +72,25 @@ template_files = {
     "20 Peso Back": "Templates/back/20PesoBack.jpg"
 }
 
+template_files_coins = {
+    "20 Peso Coin Frontv1": "Templates/front/20PesoCoinFront.png",
+    "20 Peso Coin Frontv2": "Templates/front/20PesoCoinFrontv2.png",
+    "10 Peso Coin Frontv1": "Templates/front/10PesoCoinFront.png",
+    "10 Peso Coin Frontv2": "Templates/front/10PesoCoinFrontv2.png",
+    "5 Peso Coin Frontv1": "Templates/front/5PesoCoinFront.png",
+    "5 Peso Coin Frontv2": "Templates/front/5PesoCoinFrontv2.png",
+    "1 Peso Coin Frontv1": "Templates/front/1PesoCoinFront.png",
+    "1 Peso Coin Frontv2": "Templates/front/1PesoCoinFrontv2.png",
+    "20 Peso Coin Backv1": "Templates/back/20PesoCoinBack.png",
+    "20 Peso Coin Backv2": "Templates/back/20PesoCoinBackv2.png",
+    "10 Peso Coin Backv1": "Templates/back/10PesoCoinBack.png",
+    "10 Peso Coin Backv2": "Templates/back/10PesoCoinBackv2.png",
+    "5 Peso Coin Backv1": "Templates/back/5PesoCoinBack.png",
+    "5 Peso Coin Backv2": "Templates/back/5PesoCoinBackv2.png",
+    "1 Peso Coin Backv1": "Templates/back/1PesoCoinBack.png",
+    "1 Peso Coin Backv2": "Templates/back/1PesoCoinBackv2.png"
+}
+
 templates = {}
 for name, path in template_files.items():
     template_image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
@@ -80,6 +99,55 @@ for name, path in template_files.items():
         continue
     template_kp, template_desc = sift.detectAndCompute(template_image, None)
     templates[name] = (template_image, template_kp, template_desc)
+
+# Function to recognize coins using homography
+def recognize_coin_with_homography(template_image, template_kp, template_desc, input_kp, input_desc, coin_name, input_image):
+    # Match descriptors using FLANN-based matcher
+    FLANN_INDEX_KDTREE = 1
+    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+    search_params = dict(checks=50)  # Number of times the tree is recursively searched
+    flann = cv2.FlannBasedMatcher(index_params, search_params)
+
+    matches = flann.knnMatch(template_desc, input_desc, k=2)
+
+    # Apply ratio test to keep good matches
+    good_matches = []
+    for m, n in matches:
+        if m.distance < 0.5 * n.distance:
+            good_matches.append(m)
+
+    # Require a minimum number of matches to proceed
+    MIN_MATCH_COUNT = 15  # Adjusted for coins
+    if len(good_matches) >= MIN_MATCH_COUNT:
+        # Extract the matched keypoints
+        src_pts = np.float32([template_kp[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        dst_pts = np.float32([input_kp[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+
+        # Compute the homography matrix
+        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+        matches_mask = mask.ravel().tolist()
+
+        # Draw the bounding box for the matched area
+        h, w = template_image.shape
+        pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
+        dst = cv2.perspectiveTransform(pts, M)
+        input_image = cv2.polylines(input_image, [np.int32(dst)], True, (255, 0, 0), 3, cv2.LINE_AA)
+
+        return True, input_image, coin_name
+    else:
+        print(f"Not enough matches found for {coin_name} - {len(good_matches)} / {MIN_MATCH_COUNT}")
+        return False, input_image, None
+
+# Load coin templates
+print("Opening coin template images...")
+coin_templates = {}
+for name, path in template_files_coins.items():
+    template_image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if template_image is None:
+        print(f"Error loading coin image {path}")
+        continue
+    template_kp, template_desc = sift.detectAndCompute(template_image, None)
+    coin_templates[name] = (template_image, template_kp, template_desc)
 
 # GUI Functions
 def load_image():
@@ -91,6 +159,7 @@ def load_image():
         input_kp, input_desc = sift.detectAndCompute(gray_input_image, None)
         display_image(input_image)
 
+# Update process_image to include coin recognition
 def process_image():
     if input_desc is None or len(input_kp) == 0:
         print("No features detected in the input image.")
@@ -108,9 +177,21 @@ def process_image():
             display_image(annotated_image)
             return
 
+    for coin_name, (template_image, template_kp, template_desc) in coin_templates.items():
+        is_match, annotated_image, label = recognize_coin_with_homography(
+            template_image, template_kp, template_desc, input_kp, input_desc, coin_name, input_image
+        )
+        if is_match:
+            matched = True
+            print(f"Matched: {label}")
+            cv2.putText(annotated_image, label, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            display_image(annotated_image)
+            return
+
     if not matched:
         print("No matching template found.")
         display_image(input_image)
+
 
 def display_image(image):
     fixed_width = 600
@@ -166,6 +247,10 @@ def activate_camera():
             break
         if cv2.getWindowProperty("Camera", cv2.WND_PROP_VISIBLE) < 1:
             break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
 
     cap.release()
     cv2.destroyAllWindows()
