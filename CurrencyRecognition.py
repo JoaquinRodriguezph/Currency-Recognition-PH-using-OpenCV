@@ -2,51 +2,112 @@
 import cv2
 import numpy as np
 import os
+import time
 from ttkbootstrap import Style
 from ttkbootstrap.constants import *
 from ttkbootstrap.widgets import Button, LabelFrame
-from tkinter import filedialog, Label
+from tkinter import filedialog, Label, messagebox
 from PIL import Image, ImageTk
+
+# Global variables to store input image and its features
+input_image = None
+gray_input_image = None
+input_kp = None
+input_desc = None
 
 def recognize_bill_with_homography(template_image, template_kp, template_desc, input_kp, input_desc, bill_name, input_image):
     # Match descriptors using FLANN-based matcher
     FLANN_INDEX_KDTREE = 1
     index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
-    search_params = dict(checks=50)  # Number of times the tree is recursively searched
+    search_params = dict(checks=50)
     flann = cv2.FlannBasedMatcher(index_params, search_params)
-
     matches = flann.knnMatch(template_desc, input_desc, k=2)
 
-    # Apply ratio test to keep good matches
+    # Apply Lowe's ratio test to filter good matches
     good_matches = []
     for m, n in matches:
-        if m.distance < 0.5 * n.distance:
+        if m.distance < 0.7 * n.distance:
             good_matches.append(m)
 
     # Require a minimum number of matches to proceed
-    MIN_MATCH_COUNT = 20    # temporarily lowered the count to 20 so the video feed
-                            # can detect the bill. was originally 30
+    MIN_MATCH_COUNT = 20  # Temporarily lowered the count to 20 for better detection
     if len(good_matches) >= MIN_MATCH_COUNT:
         # Extract the matched keypoints
         src_pts = np.float32([template_kp[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
         dst_pts = np.float32([input_kp[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
-        # Compute the homography matrix
+        # Compute homography matrix
         M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
         matches_mask = mask.ravel().tolist()
+        # Draw matches for debugging
+        debug_matches = cv2.drawMatches(template_image, template_kp, input_image, input_kp, good_matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+        cv2.imwrite(f"debug_matches_{bill_name}.jpg", debug_matches)
 
-        # Draw the bounding box for the matched area
+        # Get the dimensions of the template image
         h, w = template_image.shape
+
+        # Define points to draw the bounding box
         pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
         dst = cv2.perspectiveTransform(pts, M)
-        # debug_matches = cv2.drawMatches(template_image, template_kp, input_image, input_kp, good_matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-        # cv2.imwrite(f"debug_matches_{bill_name}.jpg", debug_matches)
+
+        # Draw the bounding box on the input image
         input_image = cv2.polylines(input_image, [np.int32(dst)], True, (0, 255, 0), 3, cv2.LINE_AA)
 
         return True, input_image, bill_name
     else:
         print(f"Not enough matches found for {bill_name} - {len(good_matches)} / {MIN_MATCH_COUNT}")
         return False, input_image, None
+
+
+def recognize_with_homography(template_image, template_kp, template_desc, input_kp, input_desc, item_name, input_image, is_coin=False):
+    # Adjust FLANN matcher parameters
+    FLANN_INDEX_KDTREE = 1
+    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+    search_params = dict(checks=100)  # Increased checks for better matching
+    flann = cv2.FlannBasedMatcher(index_params, search_params)
+
+    # Adaptive matching parameters
+    MIN_MATCH_COUNT = 15 if is_coin else 25  # Lowered for coins
+    RATIO_THRESH = 0.68 if is_coin else 0.7  # More lenient for coins
+
+    matches = flann.knnMatch(template_desc, input_desc, k=2)
+
+    # Apply ratio test with adaptive threshold
+    good_matches = []
+    for m, n in matches:
+        if m.distance < RATIO_THRESH * n.distance:
+            good_matches.append(m)
+
+    # Require a minimum number of matches to proceed
+    if len(good_matches) >= MIN_MATCH_COUNT:
+        # Extract the matched keypoints
+        src_pts = np.float32([template_kp[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        dst_pts = np.float32([input_kp[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+
+        # Compute the homography matrix
+        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0, maxIters=2000)
+        matches_mask = mask.ravel().tolist() if mask is not None else []
+
+        # Draw the bounding box for the matched area
+        h, w = template_image.shape
+        pts = np.float32([[0, 0], [0, h], [w, h], [w, 0]]).reshape(-1, 1, 2)
+        dst = cv2.perspectiveTransform(pts, M)
+
+        if is_coin:
+            # Use a circle as the bounding box for coins
+            (x, y), radius = cv2.minEnclosingCircle(dst)
+            center = (int(x), int(y))
+            radius = int(radius)
+            input_image = cv2.circle(input_image, center, radius, (255, 0, 0), 3)  # Blue for coins
+        else:
+            # Use a polygon as the bounding box for bills
+            input_image = cv2.polylines(input_image, [np.int32(dst)], True, (0, 255, 0), 3)  # Green for bills
+
+        return True, input_image, item_name, good_matches
+    else:
+        print(f"Not enough matches found for {item_name} - {len(good_matches)} / {MIN_MATCH_COUNT}")
+        return False, input_image, None, []
+    
 
 # Set the working directory to the directory of the script
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -100,43 +161,6 @@ for name, path in template_files.items():
     template_kp, template_desc = sift.detectAndCompute(template_image, None)
     templates[name] = (template_image, template_kp, template_desc)
 
-# Function to recognize coins using homography
-def recognize_coin_with_homography(template_image, template_kp, template_desc, input_kp, input_desc, coin_name, input_image):
-    # Match descriptors using FLANN-based matcher
-    FLANN_INDEX_KDTREE = 1
-    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
-    search_params = dict(checks=50)  # Number of times the tree is recursively searched
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-
-    matches = flann.knnMatch(template_desc, input_desc, k=2)
-
-    # Apply ratio test to keep good matches
-    good_matches = []
-    for m, n in matches:
-        if m.distance < 0.5 * n.distance:
-            good_matches.append(m)
-
-    # Require a minimum number of matches to proceed
-    MIN_MATCH_COUNT = 15  # Adjusted for coins
-    if len(good_matches) >= MIN_MATCH_COUNT:
-        # Extract the matched keypoints
-        src_pts = np.float32([template_kp[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-        dst_pts = np.float32([input_kp[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-
-        # Compute the homography matrix
-        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-        matches_mask = mask.ravel().tolist()
-
-        # Draw the bounding box for the matched area
-        h, w = template_image.shape
-        pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
-        dst = cv2.perspectiveTransform(pts, M)
-        input_image = cv2.polylines(input_image, [np.int32(dst)], True, (255, 0, 0), 3, cv2.LINE_AA)
-
-        return True, input_image, coin_name
-    else:
-        print(f"Not enough matches found for {coin_name} - {len(good_matches)} / {MIN_MATCH_COUNT}")
-        return False, input_image, None
 
 # Load coin templates
 print("Opening coin template images...")
@@ -152,44 +176,79 @@ for name, path in template_files_coins.items():
 # GUI Functions
 def load_image():
     global input_image, gray_input_image, input_kp, input_desc
-    file_path = filedialog.askopenfilename()
+    file_path = filedialog.askopenfilename(
+        filetypes=[
+            ("Image files", "*.jpg *.jpeg *.png *.bmp *.gif"),
+            ("All files", "*.*")
+        ]
+    )
     if file_path:
-        input_image = cv2.imread(file_path)
-        gray_input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
-        input_kp, input_desc = sift.detectAndCompute(gray_input_image, None)
-        display_image(input_image)
+        try:
+            input_image = cv2.imread(file_path)
+            if input_image is None:
+                messagebox.showerror("Error", "Could not load the image. Please try another file.")
+                return
+            
+            gray_input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
+            input_kp, input_desc = sift.detectAndCompute(gray_input_image, None)
+            
+            if input_kp is None or len(input_kp) == 0:
+                messagebox.showwarning("Warning", "No features detected in the image.")
+                return
+            
+            display_image(input_image)
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred: {str(e)}")
 
-# Update process_image to include coin recognition
 def process_image():
+    global input_image  # Ensure we're using the global input_image
+    
+    # Check if an image has been loaded
+    if input_image is None:
+        messagebox.showwarning("Warning", "Please load an image first.")
+        return
+    
     if input_desc is None or len(input_kp) == 0:
-        print("No features detected in the input image.")
+        messagebox.showwarning("Warning", "No features detected in the image.")
         return
 
-    matched = False
+    # Create a copy of the input image to annotate
+    annotated_image = input_image.copy()
+
+    # Store unique matches to prevent duplicate detections
+    unique_matches = set()
+
+    # Check bills
     for bill_name, (template_image, template_kp, template_desc) in templates.items():
-        is_match, annotated_image, label = recognize_bill_with_homography(
-            template_image, template_kp, template_desc, input_kp, input_desc, bill_name, input_image
+        is_match, temp_image, label, matches = recognize_with_homography(
+            template_image, template_kp, template_desc, input_kp, input_desc, bill_name, annotated_image
         )
-        if is_match:
-            matched = True
-            print(f"Matched: {label}")
-            cv2.putText(annotated_image, label, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-            display_image(annotated_image)
-            return
+        if is_match and label not in unique_matches:
+            unique_matches.add(label)
+            annotated_image = temp_image
 
+    # Check coins
     for coin_name, (template_image, template_kp, template_desc) in coin_templates.items():
-        is_match, annotated_image, label = recognize_coin_with_homography(
-            template_image, template_kp, template_desc, input_kp, input_desc, coin_name, input_image
+        is_match, temp_image, label, matches = recognize_with_homography(
+            template_image, template_kp, template_desc, input_kp, input_desc, coin_name, annotated_image, is_coin=True
         )
-        if is_match:
-            matched = True
-            print(f"Matched: {label}")
-            cv2.putText(annotated_image, label, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-            display_image(annotated_image)
-            return
+        if is_match and label not in unique_matches:
+            unique_matches.add(label)
+            annotated_image = temp_image
 
-    if not matched:
-        print("No matching template found.")
+    # If matches found, display and print results
+    if unique_matches:
+        print("Matched Items:")
+        for label in unique_matches:
+            print(f"- {label}")
+        
+        # Add text annotations
+        for i, label in enumerate(unique_matches):
+            cv2.putText(annotated_image, label, (50, 50 + i*30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        
+        display_image(annotated_image)
+    else:
+        messagebox.showinfo("Result", "No matching template found.")
         display_image(input_image)
 
 
@@ -251,9 +310,10 @@ def activate_camera():
     cap.release()
     cv2.destroyAllWindows()
 
-
+    # Clean up
     cap.release()
     cv2.destroyAllWindows()
+
 
 # Create GUI
 style = Style(theme='cosmo') 
@@ -280,7 +340,7 @@ button_process.grid(row=0, column=1, padx=10, pady=10)
 label_image = Label(frame_top)
 label_image.grid(row=1, column=0, columnspan=2, padx=10, pady=10)
 
-button_camera = Button(frame_bottom, text="Activate Camera", command=activate_camera, bootstyle=INFO)
+button_camera = Button(frame_bottom, text="Activate Bills Camera", command=activate_camera, bootstyle=INFO)
 button_camera.grid(row=0, column=0, padx=10, pady=10)
 
 root.mainloop()
