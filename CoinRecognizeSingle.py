@@ -7,6 +7,8 @@ from ttkbootstrap import Style
 from ttkbootstrap.constants import *
 from ttkbootstrap.widgets import Button, LabelFrame
 from tkinter import Tk, Label
+import tempfile
+import zipfile
 
 # Initialize SIFT detector
 sift = cv2.SIFT_create()
@@ -147,6 +149,102 @@ def load_image():
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
 
+def batch_process_images(input_folder, output_folder, template_files):
+    """
+    Batch processes images in the input folder for coin recognition and saves the results in the output folder.
+    """
+    if not os.path.exists(input_folder):
+        print(f"Error: Input folder '{input_folder}' does not exist.")
+        return
+
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    # Load templates
+    templates = load_templates(template_files)
+
+    # Process each image in the input folder
+    for filename in os.listdir(input_folder):
+        file_path = os.path.join(input_folder, filename)
+
+        # Ensure the file is an image
+        if not filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+            print(f"Skipping non-image file: {filename}")
+            continue
+
+        print(f"Processing image: {filename}")
+        try:
+            # Detect and recognize coins
+            input_image = cv2.imread(file_path)
+            if input_image is None:
+                print(f"Error: Could not load image {file_path}")
+                continue
+
+            gray = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
+            input_kp, input_desc = sift.detectAndCompute(gray, None)
+
+            # Store matches for each template
+            matches_dict = {}
+
+            for coin_name, (template_image, template_kp, template_desc) in templates.items():
+                success, recognized_coin, num_matches = recognize_coin_with_homography(
+                    template_image, template_kp, template_desc,
+                    input_kp, input_desc, coin_name
+                )
+                matches_dict[coin_name] = num_matches
+
+            # Find the denomination with the highest number of matches
+            best_match = max(matches_dict, key=matches_dict.get)
+            print(f"Best match for {filename}: {best_match} with {matches_dict[best_match]} matches")
+
+            # Annotate the best match on the image
+            cv2.putText(input_image, f"Best match: {best_match}", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+            # Save the annotated image to the output folder
+            output_path = os.path.join(output_folder, filename)
+            cv2.imwrite(output_path, input_image)
+            print(f"Saved annotated image to: {output_path}")
+
+        except Exception as e:
+            print(f"Error processing {filename}: {str(e)}")
+
+    print("Batch processing complete.")
+
+# GUI Function for processing a ZIP file
+def batch_process_gui_zip():
+    zip_file = filedialog.askopenfilename(
+        title="Select ZIP File",
+        filetypes=[("ZIP files", "*.zip"), ("All files", "*.*")]
+    )
+    if not zip_file:
+        return
+
+    # Create a temporary directory to extract ZIP contents
+    with tempfile.TemporaryDirectory() as temp_dir:
+        try:
+            # Extract ZIP file
+            with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                zip_ref.extractall(temp_dir)
+
+            print(f"Extracted ZIP file to temporary directory: {temp_dir}")
+
+            # Prepare output folder in the same directory as the ZIP file
+            output_folder = os.path.join(os.path.dirname(zip_file), "Processed_Images")
+            if not os.path.exists(output_folder):
+                os.makedirs(output_folder)
+
+            # Process images in the temporary directory
+            batch_process_images(temp_dir, output_folder, template_files_coins)
+
+            messagebox.showinfo("Batch Processing Complete", f"Processed images saved to: {output_folder}")
+
+        except zipfile.BadZipFile:
+            messagebox.showerror("Error", "The selected file is not a valid ZIP file.")
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred: {str(e)}")
+
+
+
 # Create GUI
 style = Style(theme='cosmo')
 root = style.master
@@ -162,5 +260,10 @@ frame_top.pack(padx=10, pady=10, fill="both", expand=True)
 # Create and place buttons and label using grid layout
 button_load = Button(frame_top, text="Load Image", command=load_image, bootstyle=PRIMARY)
 button_load.pack(padx=10, pady=10)
+
+
+button_batch_process = Button(frame_top, text="Batch Process ZIP", command=batch_process_gui_zip, bootstyle=SUCCESS)
+button_batch_process.pack(padx=10, pady=10)
+
 
 root.mainloop()
