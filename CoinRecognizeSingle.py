@@ -1,11 +1,39 @@
 import cv2
 import numpy as np
 import os
+from concurrent.futures import ThreadPoolExecutor
+from tkinter import filedialog, messagebox
+from ttkbootstrap import Style
+from ttkbootstrap.constants import *
+from ttkbootstrap.widgets import Button, LabelFrame
+from tkinter import Tk, Label
 
 # Initialize SIFT detector
 sift = cv2.SIFT_create()
 
-def recognize_coin_with_homography(template_image, template_kp, template_desc, input_kp, input_desc, coin_name, input_image):
+def load_template(name, path):
+    print(f"Loading template for: {name} from {path}")
+    template_image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if template_image is None:
+        print(f"Warning: Template image {path} could not be loaded.")
+        return name, None, None, None
+    kp, desc = sift.detectAndCompute(template_image, None)
+    return name, template_image, kp, desc
+
+# Load and preprocess templates
+def load_templates(template_files):
+    print("Loading templates...")
+    templates = {}
+    with ThreadPoolExecutor(max_workers=4) as executor:  # Limit the number of threads
+        futures = [executor.submit(load_template, name, path) for name, path in template_files.items()]
+        for future in futures:
+            name, template_image, kp, desc = future.result()
+            if template_image is not None:
+                templates[name] = (template_image, kp, desc)
+    print("Finished loading templates.")
+    return templates
+
+def recognize_coin_with_homography(template_image, template_kp, template_desc, input_kp, input_desc, coin_name):
     print(f"Attempting to recognize: {coin_name}")
     
     # Match descriptors using FLANN-based matcher
@@ -36,30 +64,11 @@ def recognize_coin_with_homography(template_image, template_kp, template_desc, i
         pts = np.float32([[0, 0], [0, h], [w, h], [w, 0]]).reshape(-1, 1, 2)
         dst = cv2.perspectiveTransform(pts, M)
 
-        # Draw bounding box and annotate
-        input_image = cv2.polylines(input_image, [np.int32(dst)], True, (0, 255, 0), 3, cv2.LINE_AA)
-        cv2.putText(input_image, coin_name, tuple(np.int32(dst[0][0])), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-
-        print(f"Recognized {coin_name} and drew bounding box.")
-        return True, input_image, coin_name
+        print(f"Recognized {coin_name}.")
+        return True, coin_name, len(good_matches)
     else:
         print(f"Not enough matches for {coin_name} ({len(good_matches)}/{MIN_MATCH_COUNT})")
-        return False, input_image, None
-
-# Load and preprocess templates
-def load_templates(template_files):
-    print("Loading templates...")
-    templates = {}
-    for name, path in template_files.items():
-        print(f"Loading template for: {name} from {path}")
-        template_image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-        if template_image is None:
-            print(f"Warning: Template image {path} could not be loaded.")
-            continue
-        kp, desc = sift.detectAndCompute(template_image, None)
-        templates[name] = (template_image, kp, desc)
-    print("Finished loading templates.")
-    return templates
+        return False, None, len(good_matches)
 
 # Main function for detecting and recognizing coins
 def detect_and_recognize_coins(image_path, template_files):
@@ -74,33 +83,33 @@ def detect_and_recognize_coins(image_path, template_files):
         print(f"Error: Input image {image_path} could not be loaded.")
         return
     gray = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    canny = cv2.Canny(blur, 30, 150)
-    dilated = cv2.dilate(canny, (1, 1), iterations=2)
-
-    # Detect contours
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    print(f"Detected {len(contours)} contours in the input image.")
 
     # Detect and compute keypoints/descriptors for the input image
     input_kp, input_desc = sift.detectAndCompute(gray, None)
     print(f"Computed {len(input_kp)} keypoints for the input image.")
 
-    # Loop through contours and attempt to recognize coins
-    for i, contour in enumerate(contours):
-        print(f"Processing contour {i + 1}/{len(contours)}")
-        x, y, w, h = cv2.boundingRect(contour)
-        roi = gray[y:y+h, x:x+w]
+    # Store matches for each template
+    matches_dict = {}
 
-        # Check against each template
-        for coin_name, (template_image, template_kp, template_desc) in templates.items():
-            success, input_image, recognized_coin = recognize_coin_with_homography(
-                template_image, template_kp, template_desc,
-                input_kp, input_desc, coin_name, input_image
-            )
-            if success:
-                print(f"Coin recognized: {recognized_coin}")
-                break  # If a match is found, stop checking further templates
+    # Check against each template
+    for coin_name, (template_image, template_kp, template_desc) in templates.items():
+        success, recognized_coin, num_matches = recognize_coin_with_homography(
+            template_image, template_kp, template_desc,
+            input_kp, input_desc, coin_name
+        )
+        matches_dict[coin_name] = num_matches
+
+    # Print the number of matches for each template
+    print("Number of matches for each template:")
+    for coin_name, num_matches in matches_dict.items():
+        print(f"{coin_name}: {num_matches}")
+
+    # Find the denomination with the highest number of matches
+    best_match = max(matches_dict, key=matches_dict.get)
+    print(f"Best match: {best_match} with {matches_dict[best_match]} matches")
+
+    # Annotate the best match on the image
+    cv2.putText(input_image, f"Best match: {best_match}", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
     print("Recognition complete. Displaying results...")
     cv2.imshow("Recognized Coins", input_image)
@@ -127,6 +136,31 @@ template_files_coins = {
     "1 Peso Coin Backv2": "Templates/back/1PesoCoinBackv2.png"
 }
 
-# Run the recognition system
-image_path = "coin.jpg"  # Replace with your test image
-detect_and_recognize_coins(image_path, template_files_coins)
+# GUI Functions
+def load_image():
+    file_path = filedialog.askopenfilename(
+        filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp *.gif"), ("All files", "*.*")]
+    )
+    if file_path:
+        try:
+            detect_and_recognize_coins(file_path, template_files_coins)
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred: {str(e)}")
+
+# Create GUI
+style = Style(theme='cosmo')
+root = style.master
+root.title("Coin Recognition")
+
+# Set minimum and maximum size for the window
+root.minsize(400, 200)
+
+# Create LabelFrame
+frame_top = LabelFrame(root, text="Image Operations", bootstyle=PRIMARY)
+frame_top.pack(padx=10, pady=10, fill="both", expand=True)
+
+# Create and place buttons and label using grid layout
+button_load = Button(frame_top, text="Load Image", command=load_image, bootstyle=PRIMARY)
+button_load.pack(padx=10, pady=10)
+
+root.mainloop()
