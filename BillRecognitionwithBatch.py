@@ -49,9 +49,6 @@ def recognize_bill_with_homography(template_image, template_kp, template_desc, i
         M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
         matches_mask = mask.ravel().tolist()
 
-        debug_matches = cv2.drawMatches(template_image, template_kp, input_image, input_kp, good_matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-        cv2.imwrite(f"debug_matches_{bill_name}.jpg", debug_matches)
-
         h, w = template_image.shape
         pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
         dst = cv2.perspectiveTransform(pts, M)
@@ -194,7 +191,7 @@ def activate_camera():
 
         matched = False
         for bill_name, (template_image, template_kp, template_desc) in templates.items():
-            is_match, annotated_image, label = recognize_bill_with_homography(
+            is_match, annotated_image, label, match_count, inlier_ratio = recognize_bill_with_homography(
                 template_image, template_kp, template_desc, input_kp, input_desc, bill_name, frame
             )
             if is_match:
@@ -214,9 +211,6 @@ def activate_camera():
     cap.release()
     cv2.destroyAllWindows()
 
-    # Clean up
-    cap.release()
-    cv2.destroyAllWindows()
 
 def process_zip_file():
     global input_image, gray_input_image, input_kp, input_desc
