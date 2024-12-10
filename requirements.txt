@@ -1,0 +1,3 @@
+run the following in your terminal to install the required libraries:
+
+pip install opencv-python numpy ttkbootstrap pillow
