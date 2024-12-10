@@ -18,37 +18,43 @@ input_kp = None
 input_desc = None
 
 def recognize_bill_with_homography(template_image, template_kp, template_desc, input_kp, input_desc, bill_name, input_image):
+    # Check if descriptors are None
     if template_desc is None or input_desc is None:
         print(f"Descriptors are None for {bill_name}")
         return False, input_image, None, 0, 0.0
 
+    # Check if descriptors are empty
     if len(template_desc) == 0 or len(input_desc) == 0:
         print(f"No descriptors found for {bill_name}")
         return False, input_image, None, 0, 0.0
 
+    # FLANN parameters
     FLANN_INDEX_KDTREE = 1
     index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
     search_params = dict(checks=50)
     flann = cv2.FlannBasedMatcher(index_params, search_params)
 
     try:
+        # Match descriptors using KNN
         matches = flann.knnMatch(template_desc, input_desc, k=2)
     except Exception as e:
         print(f"Error during knnMatch for {bill_name}: {e}")
         return False, input_image, None, 0, 0.0
 
+    # Filter good matches using Lowe's ratio test
     good_matches = [m for m, n in matches if m.distance < 0.7 * n.distance]
     match_count = len(good_matches)
     inlier_ratio = match_count / len(matches) if matches else 0.0
 
     MIN_MATCH_COUNT = 20
-    if match_count >= MIN_MATCH_COUNT:
+    if match_count >= MIN_MATCH_COUNT:  # Extract location of good matches
         src_pts = np.float32([template_kp[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
         dst_pts = np.float32([input_kp[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
-        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0) # Find homography
         matches_mask = mask.ravel().tolist()
 
+        # Draw bounding box in the input image
         h, w = template_image.shape
         pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
         dst = cv2.perspectiveTransform(pts, M)
@@ -86,7 +92,7 @@ template_files = {
     "20 Peso Back": "Templates/back/20PesoBack.jpg"
 }
 
-templates = {}
+templates = {}  # Dictionary to store templates and their features
 for name, path in template_files.items():
     template_image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if template_image is None:
@@ -99,6 +105,7 @@ for name, path in template_files.items():
 # GUI Functions
 def load_image():
     global input_image, gray_input_image, input_kp, input_desc
+    # Open file dialog to select an image
     file_path = filedialog.askopenfilename(
         filetypes=[
             ("Image files", "*.jpg *.jpeg *.png *.bmp *.gif"),
@@ -107,11 +114,13 @@ def load_image():
     )
     if file_path:
         try:
+            # Load the selected image
             input_image = cv2.imread(file_path)
             if input_image is None:
                 messagebox.showerror("Error", "Could not load the image. Please try another file.")
                 return
             
+            # Convert to grayscale and detect features
             gray_input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
             input_kp, input_desc = sift.detectAndCompute(gray_input_image, None)
             
@@ -119,6 +128,7 @@ def load_image():
                 messagebox.showwarning("Warning", "No features detected in the image.")
                 return
             
+            # Display the loaded image
             display_image(input_image)
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
@@ -132,7 +142,7 @@ def process_image():
 
     annotated_image = input_image.copy()
     match_scores = {}
-
+    # Match the input image with each template
     for bill_name, (template_image, template_kp, template_desc) in templates.items():
         is_match, temp_image, label, match_count, inlier_ratio = recognize_bill_with_homography(
             template_image, template_kp, template_desc, input_kp, input_desc, bill_name, annotated_image
@@ -143,6 +153,7 @@ def process_image():
             match_scores[label] = score
 
     if match_scores:
+        # Find the best match and display it
         best_match = max(match_scores, key=match_scores.get)
         print(f"Best Match: {best_match} with score: {match_scores[best_match]:.2f}")
         cv2.putText(annotated_image, f"Best Match: {best_match}", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
@@ -154,12 +165,14 @@ def process_image():
 
 
 def display_image(image):
+    # Resize the image to fit the display area
     fixed_width = 600
     height, width = image.shape[:2]
     aspect_ratio = height / width
     new_height = int(fixed_width * aspect_ratio)
     resized_image = cv2.resize(image, (fixed_width, new_height))
 
+    # Convert the image to RGB and display it using Tkinter
     image_rgb = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
     image_pil = Image.fromarray(image_rgb)
     image_tk = ImageTk.PhotoImage(image_pil)
@@ -167,18 +180,18 @@ def display_image(image):
     label_image.image = image_tk
 
 def activate_camera():
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(0) # Open the camera
     if not cap.isOpened():
         print("Error: Could not open camera.")
         return
 
     while True:
-        ret, frame = cap.read()
+        ret, frame = cap.read() # Read a frame from the camera
         if not ret:
             print("Error: Could not read frame.")
             break
 
-        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) # Convert the frame to grayscale and detect features
         input_kp, input_desc = sift.detectAndCompute(gray_frame, None)
 
         if input_desc is None or len(input_kp) == 0:
@@ -190,6 +203,7 @@ def activate_camera():
             continue
 
         matched = False
+        # Match the frame with each template
         for bill_name, (template_image, template_kp, template_desc) in templates.items():
             is_match, annotated_image, label, match_count, inlier_ratio = recognize_bill_with_homography(
                 template_image, template_kp, template_desc, input_kp, input_desc, bill_name, frame
@@ -213,6 +227,7 @@ def activate_camera():
 
 
 def process_zip_file():
+    # Prompt user to select a ZIP file
     global input_image, gray_input_image, input_kp, input_desc
     
     # Prompt user to select a ZIP file
@@ -243,6 +258,7 @@ def process_zip_file():
                         print(f"Skipping non-image file: {file_name}")
                         continue
                     
+                    # Convert to grayscale and detect features
                     gray_input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
                     input_kp, input_desc = sift.detectAndCompute(gray_input_image, None)
 
